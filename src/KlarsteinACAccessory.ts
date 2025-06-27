@@ -254,6 +254,30 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
     this.initFanCharacteristics();
     this.initDehumidifierCharacteristics();
     this.initSleepModeCharacteristics();
+
+    // Synchroniser les températures au démarrage
+    this.syncTemperatures();
+  }
+
+  private async syncTemperatures(): Promise<void> {
+    try {
+      const status = await this.getStatus();
+      const temp = status.temp_c_set || 22;
+
+      // Forcer la synchronisation des deux seuils de température
+      this.heaterCoolerService.updateCharacteristic(
+        this.hap.Characteristic.CoolingThresholdTemperature,
+        temp
+      );
+      this.heaterCoolerService.updateCharacteristic(
+        this.hap.Characteristic.HeatingThresholdTemperature,
+        temp
+      );
+
+      this.log.info(`🔄 Températures synchronisées: ${temp}°C`);
+    } catch (err) {
+      this.log.error("❌ Erreur syncTemperatures:", err);
+    }
   }
 
   private initHeaterCoolerCharacteristics(): void {
@@ -305,11 +329,12 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
       .onSet(async (value) => {
         try {
           await this.setStatus("temp_c_set", value);
-          // Synchroniser avec la température de chauffage
+          // Synchroniser IMMÉDIATEMENT avec la température de chauffage
           this.heaterCoolerService.updateCharacteristic(
             Characteristic.HeatingThresholdTemperature,
             value
           );
+          this.log.info(`🌡️ Température unique définie: ${value}°C`);
         } catch (err) {
           this.log.error("❌ Erreur CoolingThresholdTemperature onSet:", err);
         }
@@ -373,17 +398,23 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
       .onGet(async () => {
         try {
           const status = await this.getStatus();
-          return status.temp_c_set || 22; // Utilisé comme température actuelle
+          return status.temp_c_disp || 22; // Utilisé comme température actuelle
         } catch (err) {
           this.log.error("❌ Erreur CurrentTemperature onGet:", err);
           return 22;
         }
       });
 
-    // Température de chauffage (identique à la température de refroidissement pour le mode AUTO)
+    // Température de chauffage (forcée identique à la température de refroidissement)
+    // Cela simule une consigne unique même en mode AUTO
     this.heaterCoolerService
       .getCharacteristic(Characteristic.HeatingThresholdTemperature)
-      .setProps({ minValue: 18, maxValue: 32, minStep: 1 })
+      .setProps({
+        minValue: 18,
+        maxValue: 32,
+        minStep: 1,
+        // Masquer cette caractéristique car elle sera automatiquement synchronisée
+      })
       .onGet(async () => {
         try {
           const status = await this.getStatus();
@@ -396,11 +427,12 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
       .onSet(async (value) => {
         try {
           await this.setStatus("temp_c_set", value);
-          // Synchroniser avec la température de refroidissement
+          // Synchroniser IMMÉDIATEMENT avec la température de refroidissement
           this.heaterCoolerService.updateCharacteristic(
             Characteristic.CoolingThresholdTemperature,
             value
           );
+          this.log.info(`🌡️ Température unique définie: ${value}°C`);
         } catch (err) {
           this.log.error("❌ Erreur HeatingThresholdTemperature onSet:", err);
         }
