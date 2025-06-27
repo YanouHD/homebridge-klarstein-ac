@@ -305,14 +305,25 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
       .onSet(async (value) => {
         try {
           await this.setStatus("temp_c_set", value);
+          // Synchroniser avec la température de chauffage
+          this.heaterCoolerService.updateCharacteristic(
+            Characteristic.HeatingThresholdTemperature,
+            value
+          );
         } catch (err) {
           this.log.error("❌ Erreur CoolingThresholdTemperature onSet:", err);
         }
       });
 
-    // État cible (refroidissement/auto)
+    // État cible (refroidissement/auto) - Limiter aux options COOL et AUTO seulement
     this.heaterCoolerService
       .getCharacteristic(Characteristic.TargetHeaterCoolerState)
+      .setProps({
+        validValues: [
+          Characteristic.TargetHeaterCoolerState.AUTO,
+          Characteristic.TargetHeaterCoolerState.COOL,
+        ],
+      })
       .onGet(async () => {
         try {
           const status = await this.getStatus();
@@ -366,6 +377,32 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
         } catch (err) {
           this.log.error("❌ Erreur CurrentTemperature onGet:", err);
           return 22;
+        }
+      });
+
+    // Température de chauffage (identique à la température de refroidissement pour le mode AUTO)
+    this.heaterCoolerService
+      .getCharacteristic(Characteristic.HeatingThresholdTemperature)
+      .setProps({ minValue: 18, maxValue: 32, minStep: 1 })
+      .onGet(async () => {
+        try {
+          const status = await this.getStatus();
+          return status.temp_c_set || 22;
+        } catch (err) {
+          this.log.error("❌ Erreur HeatingThresholdTemperature onGet:", err);
+          return 22;
+        }
+      })
+      .onSet(async (value) => {
+        try {
+          await this.setStatus("temp_c_set", value);
+          // Synchroniser avec la température de refroidissement
+          this.heaterCoolerService.updateCharacteristic(
+            Characteristic.CoolingThresholdTemperature,
+            value
+          );
+        } catch (err) {
+          this.log.error("❌ Erreur HeatingThresholdTemperature onSet:", err);
         }
       });
 
