@@ -1,0 +1,36 @@
+
+{
+  "pluginAlias": "KlarsteinAC",
+  "pluginType": "accessory",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "Klarstein Klimaanlage"
+      },
+      "deviceId": {
+        "title": "Device ID",
+        "type": "string"
+      },
+      "localKey": {
+        "title": "Local Key",
+        "type": "string"
+      },
+      "ip": {
+        "title": "IP Address",
+        "type": "string"
+      },
+      "clientId": {
+        "title": "Client ID",
+        "type": "string"
+      },
+      "clientSecret": {
+        "title": "Client Secret",
+        "type": "string"
+      }
+    },
+    "required": ["name", "deviceId", "localKey", "ip", "clientId", "clientSecret"]
+  }
+}

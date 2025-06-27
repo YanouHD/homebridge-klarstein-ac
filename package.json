@@ -1,0 +1,27 @@
+{
+  "name": "homebridge-klarstein-ac",
+  "version": "1.0.23",
+  "description": "Homebridge plugin for Klarstein AC (Tuya-based)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "homebridge-plugin"
+  ],
+  "engines": {
+    "homebridge": ">=1.3.0",
+    "node": ">=14.17.0"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "crypto": "^1.0.1",
+    "tuyapi": "^7.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "homebridge": "^1.6.0",
+    "typescript": "^5.0.0"
+  }
+}
