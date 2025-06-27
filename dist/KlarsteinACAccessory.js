@@ -16,12 +16,20 @@ class KlarsteinACAccessory {
         this.clientId = config.clientId;
         this.clientSecret = config.clientSecret;
         this.hap = api.hap;
-        this.service = new this.hap.Service.HeaterCooler(this.name);
+        // Service d'information de l'accessoire
         this.infoService = new this.hap.Service.AccessoryInformation()
             .setCharacteristic(this.hap.Characteristic.Manufacturer, "Klarstein")
-            .setCharacteristic(this.hap.Characteristic.Model, "Tuya AC")
+            .setCharacteristic(this.hap.Characteristic.Model, "Tuya AC Multi-Mode")
             .setCharacteristic(this.hap.Characteristic.SerialNumber, this.deviceId);
-        this.initCharacteristics();
+        // Service climatiseur/chauffage (modes cool et auto)
+        this.heaterCoolerService = new this.hap.Service.HeaterCooler(`${this.name} Climatiseur`);
+        // Service ventilateur (mode fan)
+        this.fanService = new this.hap.Service.Fan(`${this.name} Ventilateur`);
+        // Service déshumidificateur (mode dry)
+        this.dehumidifierService = new this.hap.Service.HumidifierDehumidifier(`${this.name} Déshumidificateur`);
+        // Service mode sommeil
+        this.sleepModeService = new this.hap.Service.Switch(`${this.name} Mode Sommeil`);
+        this.initAllCharacteristics();
     }
     generateUUID() {
         return crypto_1.default.randomUUID();
@@ -100,7 +108,7 @@ class KlarsteinACAccessory {
         const url = `/v1.0/devices/${this.deviceId}/status`;
         const { sign, t, nonce } = this.createBusinessSignature("GET", url);
         try {
-            const res = await axios_1.default.get(`${this.apiBase}${url}`, {
+            const res = await axios_1.default.get(`${this.apiBase}/devices/${this.deviceId}/status`, {
                 headers: {
                     client_id: this.clientId,
                     access_token: this.accessToken,
@@ -127,7 +135,7 @@ class KlarsteinACAccessory {
         const body = JSON.stringify({ commands: [{ code, value }] });
         const { sign, t, nonce } = this.createBusinessSignature("POST", url, body);
         try {
-            await axios_1.default.post(`${this.apiBase}${url}`, {
+            await axios_1.default.post(`${this.apiBase}/devices/${this.deviceId}/commands`, {
                 commands: [{ code, value }],
             }, {
                 headers: {
@@ -146,32 +154,67 @@ class KlarsteinACAccessory {
             this.log.error("❌ Erreur setStatus:", err?.response?.data || err?.message || err);
         }
     }
-    initCharacteristics() {
+    async getCurrentMode() {
+        try {
+            const status = await this.getStatus();
+            return status.mode || "cool";
+        }
+        catch (err) {
+            this.log.error("❌ Erreur getCurrentMode:", err);
+            return "cool";
+        }
+    }
+    async setMode(mode) {
+        try {
+            await this.setStatus("mode", mode);
+            this.log.info(`🔄 Mode changé vers: ${mode}`);
+        }
+        catch (err) {
+            this.log.error("❌ Erreur setMode:", err);
+        }
+    }
+    initAllCharacteristics() {
+        this.initHeaterCoolerCharacteristics();
+        this.initFanCharacteristics();
+        this.initDehumidifierCharacteristics();
+        this.initSleepModeCharacteristics();
+    }
+    initHeaterCoolerCharacteristics() {
         const { Characteristic } = this.hap;
-        this.service
+        // Active - contrôle l'alimentation générale
+        this.heaterCoolerService
             .getCharacteristic(Characteristic.Active)
             .onGet(async () => {
             try {
                 const status = await this.getStatus();
-                return status.power
+                const currentMode = status.mode || "cool";
+                return status.power &&
+                    (currentMode === "cool" || currentMode === "auto")
                     ? Characteristic.Active.ACTIVE
                     : Characteristic.Active.INACTIVE;
             }
             catch (err) {
-                this.log.error("❌ Erreur Active onGet:", err);
+                this.log.error("❌ Erreur HeaterCooler Active onGet:", err);
                 return Characteristic.Active.INACTIVE;
             }
         })
             .onSet(async (value) => {
             try {
-                const on = value === Characteristic.Active.ACTIVE;
-                await this.setStatus("power", on);
+                const isActive = value === Characteristic.Active.ACTIVE;
+                if (isActive) {
+                    await this.setStatus("power", true);
+                    await this.setMode("cool"); // Activer en mode climatiseur
+                }
+                else {
+                    await this.setStatus("power", false);
+                }
             }
             catch (err) {
-                this.log.error("❌ Erreur Active onSet:", err);
+                this.log.error("❌ Erreur HeaterCooler Active onSet:", err);
             }
         });
-        this.service
+        // Température de refroidissement cible
+        this.heaterCoolerService
             .getCharacteristic(Characteristic.CoolingThresholdTemperature)
             .setProps({ minValue: 18, maxValue: 32, minStep: 1 })
             .onGet(async () => {
@@ -192,77 +235,304 @@ class KlarsteinACAccessory {
                 this.log.error("❌ Erreur CoolingThresholdTemperature onSet:", err);
             }
         });
-        this.service
-            .getCharacteristic(Characteristic.RotationSpeed)
-            .setProps({ minValue: 0, maxValue: 100, minStep: 50 })
+        // État cible (refroidissement/auto)
+        this.heaterCoolerService
+            .getCharacteristic(Characteristic.TargetHeaterCoolerState)
             .onGet(async () => {
             try {
                 const status = await this.getStatus();
-                switch (status.speed) {
-                    case "low":
-                        return 0;
-                    case "mid":
-                        return 50;
-                    case "high":
-                        return 100;
-                    default:
-                        return 50;
-                }
+                return status.mode === "auto"
+                    ? Characteristic.TargetHeaterCoolerState.AUTO
+                    : Characteristic.TargetHeaterCoolerState.COOL;
             }
             catch (err) {
-                this.log.error("❌ Erreur RotationSpeed onGet:", err);
-                return 50;
+                this.log.error("❌ Erreur TargetHeaterCoolerState onGet:", err);
+                return Characteristic.TargetHeaterCoolerState.COOL;
             }
         })
             .onSet(async (value) => {
             try {
-                let speed = "mid";
-                const num = Number(value);
-                if (num >= 75)
-                    speed = "high";
-                else if (num >= 25)
-                    speed = "mid";
-                else
-                    speed = "low";
-                await this.setStatus("speed", speed);
+                const mode = value === Characteristic.TargetHeaterCoolerState.AUTO
+                    ? "auto"
+                    : "cool";
+                await this.setMode(mode);
             }
             catch (err) {
-                this.log.error("❌ Erreur RotationSpeed onSet:", err);
+                this.log.error("❌ Erreur TargetHeaterCoolerState onSet:", err);
             }
         });
-        this.service
-            .getCharacteristic(Characteristic.TargetHeaterCoolerState)
-            .onGet(() => Characteristic.TargetHeaterCoolerState.COOL)
-            .onSet((_value) => { });
-        this.service
+        // État actuel
+        this.heaterCoolerService
             .getCharacteristic(Characteristic.CurrentHeaterCoolerState)
             .onGet(async () => {
             try {
                 const status = await this.getStatus();
-                return status.power
-                    ? Characteristic.CurrentHeaterCoolerState.COOLING
-                    : Characteristic.CurrentHeaterCoolerState.INACTIVE;
+                const currentMode = status.mode || "cool";
+                if (!status.power ||
+                    (currentMode !== "cool" && currentMode !== "auto")) {
+                    return Characteristic.CurrentHeaterCoolerState.INACTIVE;
+                }
+                return Characteristic.CurrentHeaterCoolerState.COOLING;
             }
             catch (err) {
                 this.log.error("❌ Erreur CurrentHeaterCoolerState onGet:", err);
                 return Characteristic.CurrentHeaterCoolerState.INACTIVE;
             }
         });
-        this.service
+        // Température actuelle
+        this.heaterCoolerService
             .getCharacteristic(Characteristic.CurrentTemperature)
             .onGet(async () => {
             try {
                 const status = await this.getStatus();
-                return status.temp_c_set || 22;
+                return status.temp_c_set || 22; // Utilisé comme température actuelle
             }
             catch (err) {
                 this.log.error("❌ Erreur CurrentTemperature onGet:", err);
                 return 22;
             }
         });
+        // Vitesse de rotation
+        this.heaterCoolerService
+            .getCharacteristic(Characteristic.RotationSpeed)
+            .setProps({ minValue: 0, maxValue: 100, minStep: 33 })
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                switch (status.speed) {
+                    case "low":
+                        return 33;
+                    case "mid":
+                        return 66;
+                    case "high":
+                        return 100;
+                    default:
+                        return 66;
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur HeaterCooler RotationSpeed onGet:", err);
+                return 66;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                let speed = "mid";
+                const num = Number(value);
+                if (num >= 84)
+                    speed = "high";
+                else if (num >= 50)
+                    speed = "mid";
+                else
+                    speed = "low";
+                await this.setStatus("speed", speed);
+            }
+            catch (err) {
+                this.log.error("❌ Erreur HeaterCooler RotationSpeed onSet:", err);
+            }
+        });
+    }
+    initFanCharacteristics() {
+        const { Characteristic } = this.hap;
+        // Ventilateur On/Off
+        this.fanService
+            .getCharacteristic(Characteristic.On)
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                return status.power && status.mode === "fan";
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Fan On onGet:", err);
+                return false;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                if (value) {
+                    await this.setStatus("power", true);
+                    await this.setMode("fan");
+                }
+                else {
+                    await this.setStatus("power", false);
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Fan On onSet:", err);
+            }
+        });
+        // Vitesse du ventilateur
+        this.fanService
+            .getCharacteristic(Characteristic.RotationSpeed)
+            .setProps({ minValue: 0, maxValue: 100, minStep: 33 })
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                if (!status.power || status.mode !== "fan")
+                    return 0;
+                switch (status.speed) {
+                    case "low":
+                        return 33;
+                    case "mid":
+                        return 66;
+                    case "high":
+                        return 100;
+                    default:
+                        return 66;
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Fan RotationSpeed onGet:", err);
+                return 0;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                if (Number(value) > 0) {
+                    let speed = "mid";
+                    const num = Number(value);
+                    if (num >= 84)
+                        speed = "high";
+                    else if (num >= 50)
+                        speed = "mid";
+                    else
+                        speed = "low";
+                    await this.setStatus("speed", speed);
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Fan RotationSpeed onSet:", err);
+            }
+        });
+    }
+    initDehumidifierCharacteristics() {
+        const { Characteristic } = this.hap;
+        // Déshumidificateur On/Off
+        this.dehumidifierService
+            .getCharacteristic(Characteristic.Active)
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                return status.power && status.mode === "dry"
+                    ? Characteristic.Active.ACTIVE
+                    : Characteristic.Active.INACTIVE;
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Dehumidifier Active onGet:", err);
+                return Characteristic.Active.INACTIVE;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                const isActive = value === Characteristic.Active.ACTIVE;
+                if (isActive) {
+                    await this.setStatus("power", true);
+                    await this.setMode("dry");
+                }
+                else {
+                    await this.setStatus("power", false);
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Dehumidifier Active onSet:", err);
+            }
+        });
+        // État cible du déshumidificateur
+        this.dehumidifierService
+            .getCharacteristic(Characteristic.TargetHumidifierDehumidifierState)
+            .onGet(() => Characteristic.TargetHumidifierDehumidifierState.DEHUMIDIFIER)
+            .onSet((_value) => { });
+        // État actuel du déshumidificateur
+        this.dehumidifierService
+            .getCharacteristic(Characteristic.CurrentHumidifierDehumidifierState)
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                return status.power && status.mode === "dry"
+                    ? Characteristic.CurrentHumidifierDehumidifierState.DEHUMIDIFYING
+                    : Characteristic.CurrentHumidifierDehumidifierState.INACTIVE;
+            }
+            catch (err) {
+                this.log.error("❌ Erreur CurrentHumidifierDehumidifierState onGet:", err);
+                return Characteristic.CurrentHumidifierDehumidifierState.INACTIVE;
+            }
+        });
+        // Vitesse du déshumidificateur
+        this.dehumidifierService
+            .getCharacteristic(Characteristic.RotationSpeed)
+            .setProps({ minValue: 0, maxValue: 100, minStep: 33 })
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                if (!status.power || status.mode !== "dry")
+                    return 0;
+                switch (status.speed) {
+                    case "low":
+                        return 33;
+                    case "mid":
+                        return 66;
+                    case "high":
+                        return 100;
+                    default:
+                        return 66;
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Dehumidifier RotationSpeed onGet:", err);
+                return 0;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                if (Number(value) > 0) {
+                    let speed = "mid";
+                    const num = Number(value);
+                    if (num >= 84)
+                        speed = "high";
+                    else if (num >= 50)
+                        speed = "mid";
+                    else
+                        speed = "low";
+                    await this.setStatus("speed", speed);
+                }
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Dehumidifier RotationSpeed onSet:", err);
+            }
+        });
+    }
+    initSleepModeCharacteristics() {
+        const { Characteristic } = this.hap;
+        // Mode sommeil On/Off
+        this.sleepModeService
+            .getCharacteristic(Characteristic.On)
+            .onGet(async () => {
+            try {
+                const status = await this.getStatus();
+                return Boolean(status.sleep);
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Sleep Mode onGet:", err);
+                return false;
+            }
+        })
+            .onSet(async (value) => {
+            try {
+                await this.setStatus("sleep", Boolean(value));
+            }
+            catch (err) {
+                this.log.error("❌ Erreur Sleep Mode onSet:", err);
+            }
+        });
     }
     getServices() {
-        return [this.infoService, this.service];
+        return [
+            this.infoService,
+            this.heaterCoolerService,
+            this.fanService,
+            this.dehumidifierService,
+            this.sleepModeService,
+        ];
     }
 }
 exports.KlarsteinACAccessory = KlarsteinACAccessory;
