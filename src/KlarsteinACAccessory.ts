@@ -146,7 +146,7 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
     const { sign, t, nonce } = this.createBusinessSignature("GET", url);
 
     try {
-      const res = await axios.get(`${this.apiBase}${url}`, {
+      const res = await axios.get(`${this.apiBase}/devices/${this.deviceId}/status`, {
         headers: {
           client_id: this.clientId,
           access_token: this.accessToken,
@@ -156,7 +156,6 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
           nonce: nonce,
         },
       });
-
       const status: Record<string, any> = {};
       for (const dp of res.data.result) {
         status[dp.code] = dp.value;
@@ -180,7 +179,7 @@ export class KlarsteinACAccessory implements AccessoryPlugin {
 
     try {
       await axios.post(
-        `${this.apiBase}${url}`,
+        `${this.apiBase}/devices/${this.deviceId}/commands`,
         {
           commands: [{ code, value }],
         },
